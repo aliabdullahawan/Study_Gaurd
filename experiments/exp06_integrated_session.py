@@ -8,13 +8,65 @@ import time
 import threading
 import math
 import queue
+import uuid
+from datetime import datetime
+from enum import Enum
 from dataclasses import dataclass
+from typing import Optional
 from pynput import mouse, keyboard
 
-# --- The Dataclasses ---
+# SESSION MANAGEMENT CLASSES
+class SessionStatus(Enum):
+    IDLE = "IDLE"
+    ACTIVE = "ACTIVE"
+    COMPLETED = "COMPLETED"
+
+@dataclass
+class Session:
+    session_id: str
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    status: SessionStatus = SessionStatus.IDLE
+    
+    def get_duration_seconds(self) -> float:
+        if self.start_time is None: return 0.0
+        end = self.end_time if self.end_time else datetime.now()
+        return (end - self.start_time).total_seconds()
+
+class SessionManager:
+    def __init__(self):
+        self.current_session: Optional[Session] = None
+
+    def start_session(self) -> Session:
+        if self.current_session and self.current_session.status == SessionStatus.ACTIVE:
+            return self.current_session
+            
+        self.current_session = Session(
+            session_id=str(uuid.uuid4()),
+            start_time=datetime.now(),
+            status=SessionStatus.ACTIVE
+        )
+        print(f"\n[SESSION] Started tracking Session ID: {self.current_session.session_id}")
+        return self.current_session
+
+    def end_session(self) -> Optional[Session]:
+        if not self.current_session or self.current_session.status != SessionStatus.ACTIVE:
+            return None
+            
+        self.current_session.end_time = datetime.now()
+        self.current_session.status = SessionStatus.COMPLETED
+        
+        completed = self.current_session
+        print(f"\n[SESSION] Ended Session ID: {completed.session_id}")
+        print(f"[SESSION] Total Duration: {completed.get_duration_seconds():.2f} seconds")
+        self.current_session = None 
+        return completed
+
+
+# THE DATACLASSES (Updated with session_id)
 @dataclass
 class ActivitySnapshot:
-    """A single object combining all metrics for a 5-second window."""
+    session_id: str 
     timestamp: str
     is_active: bool
     mouse_distance_pixels: float
@@ -26,31 +78,28 @@ class ActivitySnapshot:
 
 @dataclass
 class DetectionEvent:
-    """Records sudden, meaningful occurrences (like alerts)."""
+    session_id: str
     timestamp: str
     event_type: str
     description: str
 
-# --- Thread-Safe Detection Event Bus ---
+
+# Thread-Safe Detection Event Bus
 event_bus = queue.Queue()
 
-# --- SENSOR 1: The Mouse ---
+
+# The Mouse (Using your Parent Referencing) 
 class MouseMonitor:
     def __init__(self, parent):
         self.parent = parent
-        
         self.last_x = None
         self.last_y = None
-        
         self.distance_threshold = 100
         self.unpause_threshold = 5
-        
         self.click_count = 0
         self.scroll_count = 0
         self.total_distance = 0
-        
         self.listener = None
-        
 
     def update_timestamp(self):
         if not self.parent.is_inactive:
@@ -63,7 +112,6 @@ class MouseMonitor:
         
         distance = math.sqrt((x - self.last_x)**2 + (y - self.last_y)**2)
         self.last_x, self.last_y = x, y
-        
         self.total_distance += distance
         
         if self.parent.is_inactive:
@@ -79,7 +127,7 @@ class MouseMonitor:
             self.click_count += 1
             if self.parent.is_inactive:
                 self.parent.unpause_click_count += 1
-                if self.parent.unpause_click_count >= self.unpause_threshold:
+                if self.parent.unpause_click_count >= self.parent.unpause_threshold:
                     self.parent.wake_up(f"Mouse clicked {self.parent.unpause_click_count} times")
 
     def on_scroll(self, x, y, dx, dy):
@@ -87,31 +135,25 @@ class MouseMonitor:
         self.scroll_count += 1
         if self.parent.is_inactive:
             self.parent.unpause_scroll_count += 1
-            if self.parent.unpause_scroll_count >= self.unpause_threshold:
+            if self.parent.unpause_scroll_count >= self.parent.unpause_threshold:
                 self.parent.wake_up(f"Mouse scrolled {self.parent.unpause_scroll_count} times")
 
     def start(self):
-        self.listener = mouse.Listener(
-            on_move=self.on_move,
-            on_click=self.on_click, 
-            on_scroll=self.on_scroll
-        )
+        self.listener = mouse.Listener(on_move=self.on_move, on_click=self.on_click, on_scroll=self.on_scroll)
         self.listener.start()
 
     def stop(self):
         if self.listener is not None:
             self.listener.stop()
 
-# --- SENSOR 2: The Keyboard ---
+
+# The Keyboard (Using your Parent Referencing)
 class KeyboardMonitor:
     def __init__(self, parent):
         self.parent = parent
-        
         self.key_press_count = 0
         self.unpause_key_threshold = 5
-        
         self.listener = None
-        
 
     def update_timestamp(self):
         if not self.parent.is_inactive:
@@ -123,8 +165,8 @@ class KeyboardMonitor:
         
         if self.parent.is_inactive:
             self.parent.unpause_key_count += 1
-            if self.parent.unpause_key_count >= self.unpause_key_threshold:
-                self.parent.wake_up(f"Typed {self.unpause_key_threshold} keys")
+            if self.parent.unpause_key_count >= self.parent.unpause_key_threshold:
+                self.parent.wake_up(f"Typed {self.parent.unpause_key_threshold} keys")
 
     def start(self):
         self.listener = keyboard.Listener(on_press=self.on_press)
@@ -134,9 +176,12 @@ class KeyboardMonitor:
         if self.listener is not None:
             self.listener.stop()
 
-# --- MANAGER: Combined Activity Monitor ---
+
+# Combined Activity Monitor
 class CombinedActivityMonitor:
-    def __init__(self):
+    def __init__(self, session_id: str):
+        self.session_id = session_id
+        
         self.mouse = MouseMonitor(self)
         self.keyboard = KeyboardMonitor(self)
         
@@ -157,16 +202,14 @@ class CombinedActivityMonitor:
 
     def wake_up(self, reason):
         self.is_inactive = False
-
         self.accumulated_distance = 0
         self.unpause_click_count = 0
         self.unpause_scroll_count = 0
         self.unpause_key_count = 0
-        
         self.last_active_time = time.monotonic()
         
-        # Drop an Event into the queue when the user wakes up
         resume_event = DetectionEvent(
+            session_id=self.session_id,
             timestamp=time.strftime("%Y-%m-%dT%H:%M:%S"),
             event_type="ACTIVITY_RESUMED",
             description=reason
@@ -176,24 +219,21 @@ class CombinedActivityMonitor:
     def monitor_inactivity(self):
         while True:
             current_time = time.monotonic() - self.get_latest_activity_time()
-            
             if current_time >= self.inactive_threshold and not self.is_inactive:
                 self.is_inactive = True
                 
-                # Drop an Event into the queue when inactivity triggers
                 alert_event = DetectionEvent(
+                    session_id=self.session_id, # <--- Stamp it!
                     timestamp=time.strftime("%Y-%m-%dT%H:%M:%S"),
                     event_type="INACTIVITY_ALERT",
                     description=f"User inactive for {self.inactive_threshold} seconds."
                 )
                 event_bus.put(alert_event)
-                
             time.sleep(0.5)
 
     def start(self):
         self.activity_thread = threading.Thread(target=self.monitor_inactivity, daemon=True)
         self.activity_thread.start()
-        
         self.mouse.start()
         self.keyboard.start()
 
@@ -205,6 +245,7 @@ class CombinedActivityMonitor:
         inactivity_seconds = time.monotonic() - self.get_latest_activity_time()
         
         snapshot = ActivitySnapshot(
+            session_id=self.session_id, # <--- Stamp it!
             timestamp=time.strftime("%Y-%m-%dT%H:%M:%S"),
             is_active=not self.is_inactive,
             mouse_distance_pixels=round(self.mouse.total_distance, 2),
@@ -222,48 +263,53 @@ class CombinedActivityMonitor:
         
         return snapshot
 
-# --- THE CONSUMER THREAD ---
+
+# THE CONSUMER THREAD
 def process_queue_data():
-    """Runs continuously in the background, simulating a database writer."""
     print("[CONSUMER] Database processor thread started, waiting for data...")
     while True:
         data_item = event_bus.get() 
-        
         if isinstance(data_item, DetectionEvent):
-            print(f"\n>>> [DATABASE] SAVED EVENT: {data_item.event_type} | {data_item.description}")
+            print(f"\n>>> [DATABASE] SAVED EVENT for Session {data_item.session_id[:8]}... | {data_item.event_type}")
         elif isinstance(data_item, ActivitySnapshot):
-            print(f"\n>>> [DATABASE] SAVED SNAPSHOT | Active: {data_item.is_active} | MousePx: {data_item.mouse_distance_pixels} | Keys: {data_item.key_press_count}")
-            
+            print(f"\n>>> [DATABASE] SAVED SNAPSHOT for Session {data_item.session_id[:8]}... | Active: {data_item.is_active}")
         event_bus.task_done()
 
 
-
 def main():
-    # 1. Start the Consumer
+    # 1. Start the Queue Consumer
     consumer_thread = threading.Thread(target=process_queue_data, daemon=True)
     consumer_thread.start()
 
-    # 2. Start the Sensors
-    monitor = CombinedActivityMonitor()
-    print("Starting FocusGuard EVENT BUS Architecture...")
-    print("Press Ctrl+C to stop.")
+    # 2. Start a New Session Using the Manager
+    session_manager = SessionManager()
+    active_session = session_manager.start_session()
+
+    # 3. Start the Sensors (pass the new session ID to them)
+    monitor = CombinedActivityMonitor(session_id=active_session.session_id)
+    print("Press Ctrl+C to end the session.")
     monitor.start()
 
-    # 3. Main Loop (Producer for Snapshots)
+    # 4. Main Loop (Producer)
     try:
         while True:
             time.sleep(monitor.data_print_time)
-            # Fetch the snapshot and push it to the queue instead of printing directly
             data = monitor.get_snapshot()
             event_bus.put(data)
             
     except KeyboardInterrupt:
-        print(f"\n\n[SYSTEM] Ctrl+C Detected. Initiating graceful shutdown...")
+        print(f"\n\n[SYSTEM] Ctrl+C Detected.")
+        
+        # Stop tracking first
         monitor.stop()
         
-        print("[SYSTEM] Waiting for remaining queue data to save...")
-        event_bus.join() # Prevents data loss on exit! (ctrl+c only not foced close included)
-        print("[SYSTEM] All data saved. Program closed safely.")
+        # End the session formally
+        session_manager.end_session()
+        
+        # Wait for the queue to finish writing the final stamped snapshots
+        print("[SYSTEM] Waiting for remaining queue data to save to database...")
+        event_bus.join()
+        print("[SYSTEM] All session data saved safely.")
 
 if __name__ == "__main__":
     main()
