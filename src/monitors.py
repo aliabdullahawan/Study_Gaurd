@@ -1,4 +1,3 @@
-
 import os
 import math
 import time
@@ -7,23 +6,6 @@ import pygame
 import threading
 from pynput import mouse, keyboard
 from models import ActivitySnapshot, DetectionEvent
-
-
-
-
-pygame.mixer.init()
-
-# Get the folder where THIS script lives (d:\StudyGaurd\experiments)
-script_dir = os.path.dirname(os.path.abspath(__file__))
-
-# Go up one level (..) to StudyGaurd root, then into assets/alarms
-reminder_path = os.path.join(script_dir, "..", "assets", "alarms", "reminder.wav")
-aggressive_path = os.path.join(script_dir, "..", "assets", "alarms", "aggressive.wav")
-
-# Load the sounds
-reminder_sound = pygame.mixer.Sound(reminder_path)
-aggressive_sound = pygame.mixer.Sound(aggressive_path)
-
 
 
 
@@ -95,7 +77,7 @@ class KeyboardMonitor:
         if self.parent.is_inactive:
             self.parent.accumulated_actions += 1
             if self.parent.accumulated_actions >= self.parent.active_click_threshold:
-                self.parent.wake_up(f"Typed {self.parent.accumulated_actions:} keys")
+                self.parent.wake_up(f"Typed {self.parent.accumulated_actions} keys")
 
     def start(self):
         self.listener = keyboard.Listener(on_press=self.on_press)
@@ -109,11 +91,9 @@ class KeyboardMonitor:
 
 
 
-
 class CombinedActivityMonitor:
-    def __init__(self, session_id: str, inactivity_threshold_seconds: int, base_distance: float, base_clicks: int, event_bus: queue):
+    def __init__(self, session_id: str, inactivity_threshold_seconds: int, base_distance: float, base_clicks: int, event_bus: queue.Queue):
         self.session_id = session_id
-        
         self.event_bus = event_bus
         
         self.mouse = MouseMonitor(self)
@@ -136,10 +116,14 @@ class CombinedActivityMonitor:
         self.accumulated_actions = 0
         
         self.cooldown_end_time = 0.0
-        
         self.last_active_time = time.monotonic()
+        
+        # Audio references initialized to None (loaded inside start())
+        self.reminder_sound = None
+        self.aggressive_sound = None
 
-    def get_latest_activity_time(self): return self.last_active_time
+    def get_latest_activity_time(self): 
+        return self.last_active_time
 
     def wake_up(self, reason):
         # 1. Stop any currently playing audio instantly
@@ -154,7 +138,7 @@ class CombinedActivityMonitor:
                 description=f"Awake via: {reason}"
             ))
             
-        # 3. Reset states and remove the 25% penalty
+        # 3. Reset states and remove penalty
         self.is_inactive = False
         self.alarm_level = 0
         self.cooldown_end_time = time.monotonic() + 60.0
@@ -163,9 +147,7 @@ class CombinedActivityMonitor:
         
         # 4. Reset movement counters
         self.accumulated_distance = 0
-        self.unpause_click_count = 0
-        self.unpause_scroll_count = 0
-        self.unpause_key_count = 0
+        self.accumulated_actions = 0
         self.last_active_time = time.monotonic()
         
         self.event_bus.put(DetectionEvent(
@@ -177,9 +159,7 @@ class CombinedActivityMonitor:
 
     def monitor_inactivity(self):
         while True:
-            
             if time.monotonic() < self.cooldown_end_time:
-                # Keep pushing the timestamp forward so the alarm doesn't instantly trigger when cooldown ends
                 self.last_active_time = time.monotonic() 
                 time.sleep(0.5)
                 continue
@@ -192,8 +172,8 @@ class CombinedActivityMonitor:
                 self.alarm_level = 1
                 self.alarm_start_time = time.monotonic()
                 
-                # Play reminder on infinite loop (-1 means loop forever)
-                reminder_sound.play(loops=-1)
+                if self.reminder_sound:
+                    self.reminder_sound.play(loops=-1)
                 
                 self.event_bus.put(DetectionEvent(
                     session_id=self.session_id,
@@ -206,15 +186,14 @@ class CombinedActivityMonitor:
             elif self.alarm_level == 1 and (time.monotonic() - self.alarm_start_time) >= 60.0:
                 self.alarm_level = 2
                 
-                # Stop the reminder sound first
-                reminder_sound.stop()
+                if self.reminder_sound:
+                    self.reminder_sound.stop()
                 
-                # Apply the 25% Penalty
                 self.active_distance_threshold *= 1.25
                 self.active_click_threshold = int(self.active_click_threshold * 1.25)
                 
-                # Play aggressive sound on infinite loop
-                aggressive_sound.play(loops=-1)
+                if self.aggressive_sound:
+                    self.aggressive_sound.play(loops=-1)
                 
                 self.event_bus.put(DetectionEvent(
                     session_id=self.session_id,
@@ -226,14 +205,29 @@ class CombinedActivityMonitor:
             time.sleep(0.5)
 
     def start(self):
+        """Initialize audio mixer, load sounds, and start background listeners."""
+        pygame.mixer.init()
+        
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        reminder_path = os.path.join(script_dir, "..", "assets", "alarms", "reminder.wav")
+        aggressive_path = os.path.join(script_dir, "..", "assets", "alarms", "aggressive.wav")
+        
+        if os.path.exists(reminder_path):
+            self.reminder_sound = pygame.mixer.Sound(reminder_path)
+        if os.path.exists(aggressive_path):
+            self.aggressive_sound = pygame.mixer.Sound(aggressive_path)
+            
         self.activity_thread = threading.Thread(target=self.monitor_inactivity, daemon=True)
         self.activity_thread.start()
         self.mouse.start()
         self.keyboard.start()
 
     def stop(self):
+        """Stop listeners and safely shutdown audio mixer resources."""
+        self.mouse.start() # ensuring stop works properly for listeners
         self.mouse.stop()
         self.keyboard.stop()
+        pygame.mixer.quit()
 
     def get_snapshot(self):
         inactivity_seconds = time.monotonic() - self.get_latest_activity_time()
@@ -250,5 +244,3 @@ class CombinedActivityMonitor:
         )
         self.mouse.total_distance, self.mouse.click_count, self.mouse.scroll_count, self.keyboard.key_press_count = 0.0, 0, 0, 0
         return snapshot
-
-

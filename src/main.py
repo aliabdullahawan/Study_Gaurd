@@ -131,6 +131,11 @@ def process_queue_data():
 
 
 
+def final_data_flush(monitor):
+    final_data = monitor.get_snapshot()
+    event_bus.put(final_data)
+
+
 
 
 def main():
@@ -198,6 +203,7 @@ def main():
             # Auto-Kill Check
             if active_session.get_duration_seconds() >= active_session.planned_duration_seconds:
                 print("\n[SYSTEM] Planned study duration reached! Generating summary and shutting down...")
+                final_data_flush(monitor= monitor)
                 monitor.stop()
                 session_manager.end_session(reason="AUTO_COMPLETE")
                 break
@@ -213,6 +219,7 @@ def main():
             
     except KeyboardInterrupt:
         print(f"\n\n[SYSTEM] Ctrl+C Detected. Shutting down...")
+        final_data_flush(monitor= monitor)
         monitor.stop()
         # Mark as MANUAL_STOP in the database
         session_manager.end_session(reason="MANUAL_STOP")
