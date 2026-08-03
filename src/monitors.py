@@ -80,12 +80,6 @@ class MouseMonitor:
 
 
 
-
-
-
-
-
-
 class KeyboardMonitor:
     def __init__(self, parent):
         self.parent = parent
@@ -109,11 +103,6 @@ class KeyboardMonitor:
 
     def stop(self):
         if self.listener: self.listener.stop()
-
-
-
-
-
 
 
 
@@ -261,26 +250,5 @@ class CombinedActivityMonitor:
         )
         self.mouse.total_distance, self.mouse.click_count, self.mouse.scroll_count, self.keyboard.key_press_count = 0.0, 0, 0, 0
         return snapshot
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
