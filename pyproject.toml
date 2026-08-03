@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "studyguard"
+version = "1.0.0"
+dependencies = [
+    "pygame-ce",
+    "pynput"
+]
+
+[project.scripts]
+studyguard = "src.main:main"
+
+# Required for 'src' layout so pip can find your code
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
