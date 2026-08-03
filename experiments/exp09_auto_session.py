@@ -484,9 +484,9 @@ def main():
         session_mins = float(input("Enter planned study duration (in minutes): "))
         alarm_mins = float(input("Enter inactivity time before alert triggers (in minutes): "))
     except ValueError:
-        print("Invalid input. Defaulting to 1 minute session and 0.2 minute (12 sec) alarm.")
-        session_mins = 1.0
-        alarm_mins = 0.2
+        print("Invalid input. Defaulting to 5 minute session and 0.5 minute (12 sec) alarm.")
+        session_mins = 5.0
+        alarm_mins = 0.5
     
     try:
         user_dist = float(input("Enter mouse distance to stop alarm (min 500px): "))
