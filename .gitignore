@@ -1,1 +1,28 @@
+# =================( VIRTUAL ENVIRONMENT )=================
 venv/
+env/
+ENV/
+
+# =================( PYTHON CACHE & BYTECODE )=================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# =================( PACKAGING & BUILD ARTIFACTS )=================
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# =================( LOCAL DATABASES & RUNTIME DATA )=================
+assets/database/*.db
+*.db
+*.sqlite
+*.sqlite3
+
+# =================( IDE & OS SPECIFIC )=================
+.vscode/
+.DS_Store
+Thumbs.db
