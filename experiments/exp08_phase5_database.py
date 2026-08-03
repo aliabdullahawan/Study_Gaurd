@@ -68,7 +68,7 @@ def initialize_database():
     conn.close()
     print("[DATABASE] Tables initialized successfully.")
 
-# --- DATACLASSES ---
+
 @dataclass
 class ActivitySnapshot:
     session_id: str 
@@ -88,10 +88,10 @@ class DetectionEvent:
     event_type: str
     description: str
 
-# --- THREAD-SAFE QUEUE ---
+# THREAD-SAFE QUEUE 
 event_bus = queue.Queue()
 
-# --- SESSION MANAGEMENT ---
+
 class SessionStatus(Enum):
     IDLE = "IDLE"
     ACTIVE = "ACTIVE"
@@ -150,7 +150,7 @@ class SessionManager:
         self.current_session = None 
         return completed
 
-# --- SENSORS (Using your Parent Referencing) ---
+
 class MouseMonitor:
     def __init__(self, parent):
         self.parent = parent
@@ -322,7 +322,7 @@ class CombinedActivityMonitor:
         
         return snapshot
 
-# --- THE CONSUMER THREAD (Database Writer) ---
+# THE CONSUMER THREAD (Database Writer)
 def process_queue_data():
     print("[CONSUMER] Database processor thread started. Connecting to SQLite...")
     conn = sqlite3.connect(DB_FILE)
@@ -358,7 +358,7 @@ def process_queue_data():
         conn.commit()
         event_bus.task_done()
 
-# --- MAIN EXECUTION ---
+
 def main():
     # 1. Initialize the SQLite Tables
     initialize_database()

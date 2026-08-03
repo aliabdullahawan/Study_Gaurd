@@ -1,0 +1,570 @@
+# import sys
+# if sys.platform == 'win32':
+#     import ctypes
+#     kernel32 = ctypes.windll.kernel32
+#     kernel32.SetConsoleMode(kernel32.GetStdHandle(-10), 0x0080)
+
+import os
+import sys
+if sys.platform == 'win32':
+    import ctypes
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.GetStdHandle(-10) # Get standard input handle
+    
+    mode = ctypes.c_uint32()
+    kernel32.GetConsoleMode(handle, ctypes.byref(mode))
+    
+    # 0x0040 is QuickEdit Mode. We use bitwise NOT (~) to turn ONLY this off.
+    # 0x0080 is Extended Flags, which must be enabled to change QuickEdit.
+    mode.value = (mode.value & ~0x0040) | 0x0080
+    
+    kernel32.SetConsoleMode(handle, mode.value)
+
+
+# ------------------------------------------------------------------------------------------------
+
+
+
+# # Get the exact folder where this python script lives
+# SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# # Build absolute paths to your wav files
+# REMINDER_PATH = os.path.join(SCRIPT_DIR, "reminder.wav")
+# AGGRESSIVE_PATH = os.path.join(SCRIPT_DIR, "aggressive.wav")
+
+
+
+
+import time
+import threading
+import math
+import queue
+import uuid
+import sqlite3
+import pygame
+from datetime import datetime
+from enum import Enum
+from dataclasses import dataclass
+from typing import Optional
+from pynput import mouse, keyboard
+
+
+# ------------------------------------------------------------------------------------------------------
+
+DB_FILE = "focusguard.db"
+
+pygame.mixer.init()
+
+# Get the folder where THIS script lives (d:\StudyGaurd\experiments)
+script_dir = os.path.dirname(os.path.abspath(__file__))
+
+# Go up one level (..) to StudyGaurd root, then into assets/alarms
+reminder_path = os.path.join(script_dir, "..", "assets", "alarms", "reminder.wav")
+aggressive_path = os.path.join(script_dir, "..", "assets", "alarms", "aggressive.wav")
+
+# Load the sounds
+reminder_sound = pygame.mixer.Sound(reminder_path)
+aggressive_sound = pygame.mixer.Sound(aggressive_path)
+
+# ------------------------------------------------------------------------------------------------------
+
+
+# 2. Point to assets/database/ inside your project root
+DB_DIR = os.path.join(script_dir, "..", "assets", "database")
+
+# 4. Set the final path for your SQLite database file
+DB_FILE = os.path.join(DB_DIR, "focusguard.db")
+
+# ------------------------------------------------------------------------------------------------------
+
+
+
+
+def initialize_database():
+    """Creates the SQLite database with the NEW user configuration columns."""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA foreign_keys = ON;")
+    
+    # 1. Sessions Table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sessions (
+            session_id TEXT PRIMARY KEY,
+            start_time TEXT NOT NULL,
+            end_time TEXT,
+            status TEXT NOT NULL,
+            planned_duration_seconds INTEGER,
+            inactivity_threshold_seconds INTEGER,
+            termination_reason TEXT
+        )
+    """)
+    
+    # 2. Events Table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS events (
+            event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            description TEXT,
+            FOREIGN KEY (session_id) REFERENCES sessions (session_id) ON DELETE CASCADE
+        )
+    """)
+    
+    # 3. Metrics Table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS metrics (
+            metric_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            is_active BOOLEAN NOT NULL,
+            mouse_distance_pixels REAL,
+            mouse_click_count INTEGER,
+            mouse_scroll_count INTEGER,
+            key_press_count INTEGER,
+            inactivity_seconds REAL,
+            inactivity_triggered BOOLEAN,
+            FOREIGN KEY (session_id) REFERENCES sessions (session_id) ON DELETE CASCADE
+        )
+    """)
+    
+    conn.commit()
+    conn.close()
+
+
+@dataclass
+class ActivitySnapshot:
+    session_id: str 
+    timestamp: str
+    is_active: bool
+    mouse_distance_pixels: float
+    mouse_click_count: int
+    mouse_scroll_count: int
+    key_press_count: int
+    inactivity_seconds: float
+    inactivity_triggered: bool
+
+@dataclass
+class DetectionEvent:
+    session_id: str 
+    timestamp: str
+    event_type: str
+    description: str
+
+event_bus = queue.Queue()
+
+
+class SessionStatus(Enum):
+    IDLE = "IDLE"
+    ACTIVE = "ACTIVE"
+    COMPLETED = "COMPLETED"
+
+@dataclass
+class Session:
+    session_id: str
+    planned_duration_seconds: int
+    inactivity_threshold_seconds: int
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    status: SessionStatus = SessionStatus.IDLE
+    termination_reason: str = None
+    
+    def get_duration_seconds(self) -> float:
+        if self.start_time is None: return 0.0
+        end = self.end_time if self.end_time else datetime.now()
+        return (end - self.start_time).total_seconds()
+
+class SessionManager:
+    def __init__(self):
+        self.current_session: Optional[Session] = None
+
+    def start_session(self, planned_duration_sec: int, inactivity_threshold_sec: int) -> Session:
+        self.current_session = Session(
+            session_id=str(uuid.uuid4()),
+            planned_duration_seconds=planned_duration_sec,
+            inactivity_threshold_seconds=inactivity_threshold_sec,
+            start_time=datetime.now(),
+            status=SessionStatus.ACTIVE
+        )
+        
+        with sqlite3.connect(DB_FILE) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO sessions (session_id, start_time, status, planned_duration_seconds, inactivity_threshold_seconds)
+                VALUES (?, ?, ?, ?, ?)
+            """, (
+                self.current_session.session_id, 
+                self.current_session.start_time.strftime("%Y-%m-%dT%H:%M:%S"), 
+                self.current_session.status.value,
+                self.current_session.planned_duration_seconds,
+                self.current_session.inactivity_threshold_seconds
+            ))
+            conn.commit()
+            
+        print(f"\n[SESSION] Started Tracking. Session ID: {self.current_session.session_id}")
+        return self.current_session
+
+    def end_session(self, reason: str) -> Optional[Session]:
+        if not self.current_session or self.current_session.status != SessionStatus.ACTIVE:
+            return None
+            
+        self.current_session.end_time = datetime.now()
+        self.current_session.status = SessionStatus.COMPLETED
+        self.current_session.termination_reason = reason
+        
+        with sqlite3.connect(DB_FILE) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE sessions SET end_time = ?, status = ?, termination_reason = ? WHERE session_id = ?
+            """, (
+                self.current_session.end_time.strftime("%Y-%m-%dT%H:%M:%S"), 
+                self.current_session.status.value, 
+                self.current_session.termination_reason,
+                self.current_session.session_id
+            ))
+            conn.commit()
+        
+        completed = self.current_session
+        print(f"\n[SESSION] Ended Session [{reason}]. Total time: {completed.get_duration_seconds():.1f}s")
+        self.current_session = None 
+        return completed
+
+
+
+class MouseMonitor:
+    def __init__(self, parent):
+        self.parent = parent
+        self.last_x, self.last_y = None, None
+        self.click_count, self.scroll_count, self.total_distance = 0, 0, 0
+        self.listener = None
+
+    def update_timestamp(self):
+        if not self.parent.is_inactive: self.parent.last_active_time = time.monotonic()
+
+    def on_move(self, x, y):
+        if self.last_x is None and self.last_y is None:
+            self.last_x, self.last_y = x, y
+            return
+        distance = math.sqrt((x - self.last_x)**2 + (y - self.last_y)**2)
+        self.last_x, self.last_y = x, y
+        self.total_distance += distance
+        if self.parent.is_inactive:
+            self.parent.accumulated_distance += distance
+            if self.parent.accumulated_distance >= self.parent.active_distance_threshold:
+                self.parent.wake_up(f"Mouse moved {self.parent.accumulated_distance:.1f}px")
+        else:
+            self.update_timestamp()
+
+    def on_click(self, x, y, button, pressed):
+        self.update_timestamp()
+        if pressed:
+            self.click_count += 1
+            if self.parent.is_inactive:
+                self.parent.accumulated_actions += 1
+                if self.parent.accumulated_actions >= self.parent.active_click_threshold:
+                    self.parent.wake_up(f"Clicked {self.parent.accumulated_actions} times")
+
+    def on_scroll(self, x, y, dx, dy):
+        self.update_timestamp()
+        self.scroll_count += 1
+        if self.parent.is_inactive:
+            self.parent.accumulated_actions += 1
+            if self.parent.accumulated_actions >= self.parent.active_click_threshold:
+                self.parent.wake_up(f"Scrolled {self.parent.accumulated_actions} times")
+
+    def start(self):
+        self.listener = mouse.Listener(on_move=self.on_move, on_click=self.on_click, on_scroll=self.on_scroll)
+        self.listener.start()
+
+    def stop(self):
+        if self.listener: self.listener.stop()
+
+
+class KeyboardMonitor:
+    def __init__(self, parent):
+        self.parent = parent
+        self.key_press_count = 0
+        self.listener = None
+
+    def update_timestamp(self):
+        if not self.parent.is_inactive: self.parent.last_active_time = time.monotonic()
+
+    def on_press(self, key):
+        self.update_timestamp()
+        self.key_press_count += 1
+        if self.parent.is_inactive:
+            self.parent.accumulated_actions += 1
+            if self.parent.accumulated_actions >= self.parent.active_click_threshold:
+                self.parent.wake_up(f"Typed {self.parent.accumulated_actions:} keys")
+
+    def start(self):
+        self.listener = keyboard.Listener(on_press=self.on_press)
+        self.listener.start()
+
+    def stop(self):
+        if self.listener: self.listener.stop()
+
+
+class CombinedActivityMonitor:
+    def __init__(self, session_id: str, inactivity_threshold_seconds: int, base_distance: float, base_clicks: int):
+        self.session_id = session_id
+        
+        self.mouse = MouseMonitor(self)
+        self.keyboard = KeyboardMonitor(self)
+        
+        self.inactive_threshold = inactivity_threshold_seconds
+        
+        self.base_distance = base_distance
+        self.base_clicks = base_clicks
+        self.active_distance_threshold = base_distance
+        self.active_click_threshold = base_clicks
+        self.alarm_level = 0 
+        self.alarm_start_time = 0.0
+        
+        self.is_inactive = False
+        self.activity_thread = None
+        self.data_print_time = 5.0
+
+        self.accumulated_distance = 0
+        self.accumulated_actions = 0
+        
+        self.cooldown_end_time = 0.0
+        
+        self.last_active_time = time.monotonic()
+
+    def get_latest_activity_time(self): return self.last_active_time
+
+    def wake_up(self, reason):
+        # 1. Stop any currently playing audio instantly
+        pygame.mixer.stop()
+        
+        # 2. Log the dismissal event if an alarm was actually ringing
+        if self.alarm_level > 0:
+            event_bus.put(DetectionEvent(
+                session_id=self.session_id,
+                timestamp=time.strftime("%Y-%m-%dT%H:%M:%S"),
+                event_type="ALARM_DISMISSED",
+                description=f"Awake via: {reason}"
+            ))
+            
+        # 3. Reset states and remove the 25% penalty
+        self.is_inactive = False
+        self.alarm_level = 0
+        self.cooldown_end_time = time.monotonic() + 60.0
+        self.active_distance_threshold = self.base_distance
+        self.active_click_threshold = self.base_clicks
+        
+        # 4. Reset movement counters
+        self.accumulated_distance = 0
+        self.unpause_click_count = 0
+        self.unpause_scroll_count = 0
+        self.unpause_key_count = 0
+        self.last_active_time = time.monotonic()
+        
+        event_bus.put(DetectionEvent(
+            session_id=self.session_id,
+            timestamp=time.strftime("%Y-%m-%dT%H:%M:%S"),
+            event_type="ACTIVITY_RESUMED",
+            description=reason
+        ))
+
+    def monitor_inactivity(self):
+        while True:
+            
+            if time.monotonic() < self.cooldown_end_time:
+                # Keep pushing the timestamp forward so the alarm doesn't instantly trigger when cooldown ends
+                self.last_active_time = time.monotonic() 
+                time.sleep(0.5)
+                continue
+            
+            current_inactive_time = time.monotonic() - self.get_latest_activity_time()
+            
+            # LEVEL 1: The Nudge
+            if current_inactive_time >= self.inactive_threshold and self.alarm_level == 0:
+                self.is_inactive = True
+                self.alarm_level = 1
+                self.alarm_start_time = time.monotonic()
+                
+                # Play reminder on infinite loop (-1 means loop forever)
+                reminder_sound.play(loops=-1)
+                
+                event_bus.put(DetectionEvent(
+                    session_id=self.session_id,
+                    timestamp=time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    event_type="ALARM_STARTED",
+                    description="Level 1 Nudge Started"
+                ))
+
+            # LEVEL 2: The Penalty (60 seconds later)
+            elif self.alarm_level == 1 and (time.monotonic() - self.alarm_start_time) >= 60.0:
+                self.alarm_level = 2
+                
+                # Stop the reminder sound first
+                reminder_sound.stop()
+                
+                # Apply the 25% Penalty
+                self.active_distance_threshold *= 1.25
+                self.active_click_threshold = int(self.active_click_threshold * 1.25)
+                
+                # Play aggressive sound on infinite loop
+                aggressive_sound.play(loops=-1)
+                
+                event_bus.put(DetectionEvent(
+                    session_id=self.session_id,
+                    timestamp=time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    event_type="ALARM_ESCALATED",
+                    description=f"Level 2 Penalty Applied. New Dist: {self.active_distance_threshold}, Clicks: {self.active_click_threshold}"
+                ))
+
+            time.sleep(0.5)
+
+    def start(self):
+        self.activity_thread = threading.Thread(target=self.monitor_inactivity, daemon=True)
+        self.activity_thread.start()
+        self.mouse.start()
+        self.keyboard.start()
+
+    def stop(self):
+        self.mouse.stop()
+        self.keyboard.stop()
+
+    def get_snapshot(self):
+        inactivity_seconds = time.monotonic() - self.get_latest_activity_time()
+        snapshot = ActivitySnapshot(
+            session_id=self.session_id,
+            timestamp=time.strftime("%Y-%m-%dT%H:%M:%S"),
+            is_active=not self.is_inactive,
+            mouse_distance_pixels=round(self.mouse.total_distance, 2),
+            mouse_click_count=self.mouse.click_count,
+            mouse_scroll_count=self.mouse.scroll_count,
+            key_press_count=self.keyboard.key_press_count,
+            inactivity_seconds=max(0.0, round(inactivity_seconds, 2)),
+            inactivity_triggered=self.is_inactive
+        )
+        self.mouse.total_distance, self.mouse.click_count, self.mouse.scroll_count, self.keyboard.key_press_count = 0.0, 0, 0, 0
+        return snapshot
+
+# THE CONSUMER THREAD
+def process_queue_data():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA foreign_keys = ON;")
+    
+    while True:
+        data_item = event_bus.get() 
+        if isinstance(data_item, DetectionEvent):
+            cursor.execute("""
+                INSERT INTO events (session_id, timestamp, event_type, description)
+                VALUES (?, ?, ?, ?)
+            """, (data_item.session_id, data_item.timestamp, data_item.event_type, data_item.description))
+            print(f">>> [DATABASE] Saved EVENT: {data_item.event_type}")
+            
+        elif isinstance(data_item, ActivitySnapshot):
+            cursor.execute("""
+                INSERT INTO metrics (
+                    session_id, timestamp, is_active, mouse_distance_pixels, 
+                    mouse_click_count, mouse_scroll_count, key_press_count, 
+                    inactivity_seconds, inactivity_triggered
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                data_item.session_id, data_item.timestamp, data_item.is_active, 
+                data_item.mouse_distance_pixels, data_item.mouse_click_count, 
+                data_item.mouse_scroll_count, data_item.key_press_count, 
+                data_item.inactivity_seconds, data_item.inactivity_triggered
+            ))
+            
+        conn.commit()
+        event_bus.task_done()
+
+
+def main():
+    # print("Files found:", os.path.exists("reminder.wav"), os.path.exists("aggressive.wav"))
+    print("=== FocusGuard Configuration ===")
+    
+    # Fetching teh user inputs
+    try:
+        session_mins = float(input("Enter planned study duration (in minutes): "))
+        alarm_mins = float(input("Enter inactivity time before alert triggers (in minutes): "))
+    except ValueError:
+        print("Invalid input. Defaulting to 1 minute session and 0.2 minute (12 sec) alarm.")
+        session_mins = 1.0
+        alarm_mins = 0.2
+    
+    try:
+        user_dist = float(input("Enter mouse distance to stop alarm (min 500px): "))
+        base_distance = max(500.0, user_dist)
+    except ValueError:
+        base_distance = 500.0
+
+    try:
+        user_clicks = int(input("Enter mouse clicks to stop alarm (min 25): "))
+        base_clicks = max(25, user_clicks)
+    except ValueError:
+        base_clicks = 25
+        
+    print(f"\n[CONFIG] Wake-up requires: {base_distance}px OR {base_clicks} clicks.")
+    
+    planned_duration_sec = int(session_mins * 60)
+    inactivity_threshold_sec = int(alarm_mins * 60)
+
+    # 2. Initialize DB and Consumer
+    initialize_database()
+    consumer_thread = threading.Thread(target=process_queue_data, daemon=True)
+    consumer_thread.start()
+
+    # 3. Start Session with User Config
+    session_manager = SessionManager()
+    active_session = session_manager.start_session(
+        planned_duration_sec=planned_duration_sec,
+        inactivity_threshold_sec=inactivity_threshold_sec
+    )
+
+    # 4. Start Hardware Sensors
+    monitor = CombinedActivityMonitor(
+        session_id=active_session.session_id, 
+        inactivity_threshold_seconds=inactivity_threshold_sec,
+        base_distance=base_distance,    
+        base_clicks=base_clicks         
+    )
+    monitor.start()
+
+    # 5. Main Loop (Checks time dynamically instead of just sleeping)
+    print(f"\nMonitoring hardware. Will auto-stop in {planned_duration_sec} seconds.")
+    print("Press Ctrl+C to stop manually.")
+    
+    last_snapshot_time = time.monotonic()
+    
+    try:
+        while True:
+            current_time = time.monotonic()
+            
+            # Auto-Kill Check
+            if active_session.get_duration_seconds() >= active_session.planned_duration_seconds:
+                print("\n[SYSTEM] Planned study duration reached! Generating summary and shutting down...")
+                monitor.stop()
+                session_manager.end_session(reason="AUTO_COMPLETE")
+                break
+                
+            # Snapshot Generator
+            if current_time - last_snapshot_time >= monitor.data_print_time:
+                data = monitor.get_snapshot()
+                event_bus.put(data)
+                last_snapshot_time = current_time
+            
+            # Sleep slightly to prevent high CPU usage, but keep loop responsive
+            time.sleep(0.5) 
+            
+    except KeyboardInterrupt:
+        print(f"\n\n[SYSTEM] Ctrl+C Detected. Shutting down...")
+        monitor.stop()
+        # Mark as MANUAL_STOP in the database
+        session_manager.end_session(reason="MANUAL_STOP")
+
+    # Final Save
+    print("[SYSTEM] Waiting for remaining data to save to database...")
+    event_bus.join()
+    print("[SYSTEM] All data successfully saved. Goodbye!")
+
+if __name__ == "__main__":
+    main()
