@@ -55,10 +55,6 @@ def main():
         model_path = os.path.abspath(os.path.join(script_dir, "face_landmarker.task"))
         if not os.path.exists(model_path):
             print(f"[ERROR] Model file not found at: {model_path}")
-        else:
-            print(f"[INFO] Model file successfully located at: {model_path}")
-    else:
-        print(f"[INFO] Model file successfully located at: {model_path}")
 
     print("[INFO] Initializing FaceLandmarker for EAR tracking...")
     base_options = python.BaseOptions(model_asset_path=model_path)
@@ -73,6 +69,8 @@ def main():
         print("[ERROR] Could not open webcam.")
         return
 
+    start_time = time.monotonic()
+    
     with vision.FaceLandmarker.create_from_options(options) as landmarker:
         print("[INFO] Camera active. Blink your eyes and watch the EAR score change in the terminal/window. Press 'q' to quit.")
         try:
@@ -83,7 +81,7 @@ def main():
 
                 rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_image)
-                timestamp_ms = int(time.time() * 1000)
+                timestamp_ms = int((time.monotonic() - start_time) * 1000)
 
                 detection_result = landmarker.detect_for_video(mp_image, timestamp_ms)
 
