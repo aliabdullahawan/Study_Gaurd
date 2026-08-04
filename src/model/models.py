@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 
 class SessionStatus(Enum):
-    IDLE = "IDLE"
+    MANUAL_STOP = "IDLE"
     ACTIVE = "ACTIVE"
     COMPLETED = "COMPLETED"
 
@@ -56,21 +56,5 @@ class Session:
         if self.start_time is None: return 0.0
         end = self.end_time if self.end_time else datetime.now()
         return (end - self.start_time).total_seconds()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 

@@ -24,9 +24,9 @@ import sqlite3
 import threading
 from typing import Optional
 from datetime import datetime
-from monitors import CombinedActivityMonitor
-from database import DB_FILE, initialize_database
-from models import DetectionEvent, ActivitySnapshot, Session, SessionStatus
+from monitor.monitors import CombinedActivityMonitor
+from database.database import DB_FILE, initialize_database
+from model.models import DetectionEvent, ActivitySnapshot, Session, SessionStatus
 
 
 

@@ -5,7 +5,7 @@ import queue
 import pygame
 import threading
 from pynput import mouse, keyboard
-from models import ActivitySnapshot, DetectionEvent
+from model.models import ActivitySnapshot, DetectionEvent
 
 
 
