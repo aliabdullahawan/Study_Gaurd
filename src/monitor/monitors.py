@@ -5,7 +5,9 @@ import queue
 import pygame
 import threading
 from pynput import mouse, keyboard
-from model.models import ActivitySnapshot, DetectionEvent
+from model.detection_event import DetectionEvent
+from model.activity_snapshot import ActivitySnapshot
+from paths.path import REMINDER_PATH, AGGRESSIVE_PATH
 
 
 
@@ -208,9 +210,8 @@ class CombinedActivityMonitor:
         """Initialize audio mixer, load sounds, and start background listeners."""
         pygame.mixer.init()
         
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        reminder_path = os.path.join(script_dir, "..", "assets", "alarms", "reminder.wav")
-        aggressive_path = os.path.join(script_dir, "..", "assets", "alarms", "aggressive.wav")
+        reminder_path = REMINDER_PATH
+        aggressive_path = AGGRESSIVE_PATH
         
         if os.path.exists(reminder_path):
             self.reminder_sound = pygame.mixer.Sound(reminder_path)

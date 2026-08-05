@@ -1,13 +1,16 @@
-import subprocess
 import sys
-import os
+import subprocess
+from paths.path import MAIN
 
 def main():
-    # Automatically points to src/main.py
-    script_path = os.path.join(os.path.dirname(__file__), "src", "main.py")
-    
     # sys.executable ensures it uses your exact virtual environment Python automatically!
-    subprocess.run([sys.executable, script_path])
+    try:
+        subprocess.run([sys.executable, MAIN])
+    except KeyboardInterrupt:
+        # The child already handled the interrupt and saved everything.
+        # Just pass silently so we don't see the ugly traceback.
+        pass
+print("[SYSTEM] Launcher exiting cleanly.")
 
 if __name__ == "__main__":
     main()

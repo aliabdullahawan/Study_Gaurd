@@ -24,9 +24,13 @@ import sqlite3
 import threading
 from typing import Optional
 from datetime import datetime
+from paths.path import DB_FILE
+from model.session import Session
+from model.sessions_tatus import SessionStatus
+from model.detection_event import DetectionEvent
+from database.database import initialize_database
+from model.activity_snapshot import ActivitySnapshot
 from monitor.monitors import CombinedActivityMonitor
-from database.database import DB_FILE, initialize_database
-from model.models import DetectionEvent, ActivitySnapshot, Session, SessionStatus
 
 
 
