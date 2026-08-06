@@ -4,24 +4,15 @@ import cv2
 import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
+from constants.path import FACE_LANDMARKER_PATH
 
-
-# Automatically find the model file relative to project root or experiments folder
-ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 
 class FaceLandmarkEngine:
     def __init__(self):
-        
-        # Adjust path depending on where your file sits (e.g., if in src/focusguard/vision/ and model is in root)
-        # Let's point to the model file safely:
-        self.model_path = os.path.abspath(os.path.join(ROOT_DIR, "..", "..", "assets", "FaceLandMarks", "face_landmarker.task"))
-        
-        # Fallback check if model is in root or asset folder
-        if not os.path.exists(self.model_path):
-            # Try root folder path lookup
-            self.model_path = os.path.abspath(os.path.join(ROOT_DIR, "..", "..", "face_landmarker.task"))
+
+        self.model_path = FACE_LANDMARKER_PATH
 
         if not os.path.exists(self.model_path):
             raise FileNotFoundError(f"Could not find 'face_landmarker.task' model file. Please place it in the project root or experiments folder.")
@@ -69,7 +60,7 @@ class FaceLandmarkEngine:
             for landmark in face_landmarks_list:
                 x = int(landmark.x * frame.shape[1])
                 y = int(landmark.y * frame.shape[0])
-                cv2.circle(frame, (x, y), 1, (0, 0, 255), 0)
+                cv2.circle(frame, (x, y), 1, (0, 255, 0), -1)
         else:
             self.is_face_present = False
 

@@ -1,6 +1,6 @@
 import sys
 import subprocess
-from paths.path import MAIN
+from constants.path import MAIN
 
 def main():
     # sys.executable ensures it uses your exact virtual environment Python automatically!

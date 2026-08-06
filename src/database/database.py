@@ -1,7 +1,7 @@
 
 
 import sqlite3
-from paths.path import DB_FILE
+from constants.path import DB_FILE
 
 
 

@@ -7,7 +7,7 @@ import threading
 from pynput import mouse, keyboard
 from model.detection_event import DetectionEvent
 from model.activity_snapshot import ActivitySnapshot
-from paths.path import REMINDER_PATH, AGGRESSIVE_PATH
+from constants.path import REMINDER_PATH, AGGRESSIVE_PATH
 
 
 

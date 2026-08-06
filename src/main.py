@@ -24,13 +24,19 @@ import sqlite3
 import threading
 from typing import Optional
 from datetime import datetime
-from paths.path import DB_FILE
+from constants.path import DB_FILE
 from model.session import Session
 from model.sessions_tatus import SessionStatus
 from model.detection_event import DetectionEvent
 from database.database import initialize_database
 from model.activity_snapshot import ActivitySnapshot
 from monitor.monitors import CombinedActivityMonitor
+
+
+
+
+from constants.path import FACE_LANDMARKER_PATH
+from vision.calibration import  run_live_calibration
 
 
 
@@ -145,6 +151,9 @@ def final_data_flush(monitor):
 def main():
     # print("Files found:", os.path.exists("reminder.wav"), os.path.exists("aggressive.wav"))
     print("=== FocusGuard Configuration ===")
+    
+    # This will open the camera, run the UI, and return the populated dataclass
+    user_data = run_live_calibration(FACE_LANDMARKER_PATH)
     
     # Fetching teh user inputs
     try:
