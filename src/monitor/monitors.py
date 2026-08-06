@@ -10,9 +10,6 @@ from model.activity_snapshot import ActivitySnapshot
 from constants.path import REMINDER_PATH, AGGRESSIVE_PATH
 
 
-
-
-
 class MouseMonitor:
     def __init__(self, parent):
         self.parent = parent
@@ -21,7 +18,8 @@ class MouseMonitor:
         self.listener = None
 
     def update_timestamp(self):
-        if not self.parent.is_inactive: self.parent.last_active_time = time.monotonic()
+        if not self.parent.is_inactive: 
+            self.parent.last_active_time = time.monotonic()
 
     def on_move(self, x, y):
         if self.last_x is None and self.last_y is None:
@@ -59,9 +57,8 @@ class MouseMonitor:
         self.listener.start()
 
     def stop(self):
-        if self.listener: self.listener.stop()
-
-
+        if self.listener: 
+            self.listener.stop()
 
 
 class KeyboardMonitor:
@@ -71,7 +68,8 @@ class KeyboardMonitor:
         self.listener = None
 
     def update_timestamp(self):
-        if not self.parent.is_inactive: self.parent.last_active_time = time.monotonic()
+        if not self.parent.is_inactive: 
+            self.parent.last_active_time = time.monotonic()
 
     def on_press(self, key):
         self.update_timestamp()
@@ -86,17 +84,15 @@ class KeyboardMonitor:
         self.listener.start()
 
     def stop(self):
-        if self.listener: self.listener.stop()
-
-
-
-
+        if self.listener: 
+            self.listener.stop()
 
 
 class CombinedActivityMonitor:
-    def __init__(self, session_id: str, inactivity_threshold_seconds: int, base_distance: float, base_clicks: int, event_bus: queue.Queue):
+    def __init__(self, session_id: str, inactivity_threshold_seconds: int, base_distance: float, base_clicks: int, event_bus: queue.Queue, cooldown_sec: float):
         self.session_id = session_id
         self.event_bus = event_bus
+        self.cooldown_duration = cooldown_sec
         
         self.mouse = MouseMonitor(self)
         self.keyboard = KeyboardMonitor(self)
@@ -120,18 +116,23 @@ class CombinedActivityMonitor:
         self.cooldown_end_time = 0.0
         self.last_active_time = time.monotonic()
         
-        # Audio references initialized to None (loaded inside start())
         self.reminder_sound = None
         self.aggressive_sound = None
 
     def get_latest_activity_time(self): 
         return self.last_active_time
 
+    def refresh_activity(self):
+        """
+        SMART OVERRIDE: Called by SessionController when the camera detects 
+        the user is awake and present, preventing false alarms while reading.
+        """
+        if not self.is_inactive and self.alarm_level == 0:
+            self.last_active_time = time.monotonic()
+
     def wake_up(self, reason):
-        # 1. Stop any currently playing audio instantly
         pygame.mixer.stop()
         
-        # 2. Log the dismissal event if an alarm was actually ringing
         if self.alarm_level > 0:
             self.event_bus.put(DetectionEvent(
                 session_id=self.session_id,
@@ -140,14 +141,12 @@ class CombinedActivityMonitor:
                 description=f"Awake via: {reason}"
             ))
             
-        # 3. Reset states and remove penalty
         self.is_inactive = False
         self.alarm_level = 0
-        self.cooldown_end_time = time.monotonic() + 60.0
+        self.cooldown_end_time = time.monotonic() + self.cooldown_duration
         self.active_distance_threshold = self.base_distance
         self.active_click_threshold = self.base_clicks
         
-        # 4. Reset movement counters
         self.accumulated_distance = 0
         self.accumulated_actions = 0
         self.last_active_time = time.monotonic()
@@ -207,16 +206,12 @@ class CombinedActivityMonitor:
             time.sleep(0.5)
 
     def start(self):
-        """Initialize audio mixer, load sounds, and start background listeners."""
         pygame.mixer.init()
         
-        reminder_path = REMINDER_PATH
-        aggressive_path = AGGRESSIVE_PATH
-        
-        if os.path.exists(reminder_path):
-            self.reminder_sound = pygame.mixer.Sound(reminder_path)
-        if os.path.exists(aggressive_path):
-            self.aggressive_sound = pygame.mixer.Sound(aggressive_path)
+        if os.path.exists(REMINDER_PATH):
+            self.reminder_sound = pygame.mixer.Sound(REMINDER_PATH)
+        if os.path.exists(AGGRESSIVE_PATH):
+            self.aggressive_sound = pygame.mixer.Sound(AGGRESSIVE_PATH)
             
         self.activity_thread = threading.Thread(target=self.monitor_inactivity, daemon=True)
         self.activity_thread.start()
@@ -224,8 +219,6 @@ class CombinedActivityMonitor:
         self.keyboard.start()
 
     def stop(self):
-        """Stop listeners and safely shutdown audio mixer resources."""
-        self.mouse.start() # ensuring stop works properly for listeners
         self.mouse.stop()
         self.keyboard.stop()
         pygame.mixer.quit()
